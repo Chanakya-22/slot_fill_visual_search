@@ -1,0 +1,11 @@
+torch
+transformers
+datasets
+peft
+torchvision
+pillow
+scikit-learn
+seqeval
+matplotlib
+pandas
+numpy
