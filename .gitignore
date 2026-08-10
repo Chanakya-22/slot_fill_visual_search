@@ -1,1 +1,12 @@
+# Local reference document
 text_analytics_zerothreview.pdf
+
+# Generated project artifacts
+multimodal-visual-search/data/
+multimodal-visual-search/src/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local virtual environments
+.venv/
