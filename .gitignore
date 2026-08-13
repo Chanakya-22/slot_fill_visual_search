@@ -9,4 +9,4 @@ __pycache__/
 *.pyo
 
 # Local virtual environments
-.venv/
+venv/
