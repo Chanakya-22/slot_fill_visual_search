@@ -4,9 +4,12 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-def generate_mock_data(output_dir="data/raw", num_samples=100):
-    os.makedirs(output_dir, exist_ok=True)
+def generate_mock_data(num_samples=100):
+    # Resolve absolute path relative to this script file
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(base_dir, "data", "raw")
     images_dir = os.path.join(output_dir, "images")
+    
     os.makedirs(images_dir, exist_ok=True)
 
     queries = [
@@ -19,25 +22,22 @@ def generate_mock_data(output_dir="data/raw", num_samples=100):
 
     data = []
     for i in range(num_samples):
-        # 1. Generate Synthetic RGB Image
         img_filename = f"sample_{i:03d}.jpg"
         img_path = os.path.join(images_dir, img_filename)
+        
+        # Generate synthetic image
         img_array = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
         Image.fromarray(img_array).save(img_path)
 
-        # 2. Assign Text, Intent, and Slots
         query = queries[i % len(queries)]
-        intent_id = i % 5  # 5 intent classes
-        
-        # Word-level slot IDs matching the query length
+        intent_id = i % 5
         num_words = len(query.split())
         slot_ids = list(np.random.randint(0, 4, size=num_words))
 
         data.append({
-            "image_path": img_path,
+            "image_path": img_path,  # Stores absolute path
             "text_query": query,
             "intent_id": intent_id,
-            # Serialize slot_ids as a valid JSON string for safe CSV storage
             "slot_ids": json.dumps([int(x) for x in slot_ids])
         })
 

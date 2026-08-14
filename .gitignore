@@ -1,12 +1,47 @@
 # Local reference document
 text_analytics_zerothreview.pdf
 
+# Data files and datasets
+data/
+*.csv
+*.feather
+
+# Model checkpoints and weights
+*.pkl
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.joblib
+
 # Generated project artifacts
-multimodal-visual-search/data/
-multimodal-visual-search/src/__pycache__/
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
 
 # Local virtual environments
 venv/
+.venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
