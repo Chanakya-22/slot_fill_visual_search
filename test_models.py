@@ -3,6 +3,7 @@ import torch
 from src.dataset import MultiModalDataset
 from src.models.baseline_text import BaselineTextModel
 from src.models.baseline_concat import BaselineConcatModel
+from src.models.cross_attention_model import CrossAttentionModel
 
 def run_sanity_check():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,8 +40,17 @@ def run_sanity_check():
     intent_logits_c, slot_logits_c = concat_model(input_ids, attention_mask, pixel_values)
     print(f"Concat Intent Logits Shape: {intent_logits_c.shape} (Expected: [1, 5])")
     print(f"Concat Slot Logits Shape:   {slot_logits_c.shape}   (Expected: [1, 32, 4])")
+    
+    # 5. Test Phase 3: Cross-Attention Model
+    print("\n--- Testing Phase 3 (Cross-Attention Model) ---")
+    cross_model = CrossAttentionModel(num_intents=5, num_slots=4)
+    intent_logits_cross, slot_logits_cross = cross_model(input_ids, attention_mask, pixel_values)
+    print(f"Cross-Attn Intent Logits Shape: {intent_logits_cross.shape} (Expected: [1, 5])")
+    print(f"Cross-Attn Slot Logits Shape:   {slot_logits_cross.shape}   (Expected: [1, 32, 4])")
 
     print("\nSanity Check Passed Successfully!")
+    
+    
 
 if __name__ == "__main__":
     run_sanity_check()
