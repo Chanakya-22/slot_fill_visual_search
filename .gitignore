@@ -45,3 +45,5 @@ env/
 *.zip
 *.tar.gz
 *.rar
+
+next.txt
