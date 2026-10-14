@@ -28,13 +28,29 @@ class CrossAttentionModel(nn.Module):
         self.intent_classifier = nn.Linear(hidden_size, num_intents)
         self.slot_classifier = nn.Linear(hidden_size, num_slots)
         
-        # 4. Optional: Freeze CLIP visual backbone to save VRAM
-        self._freeze_vision_backbone()
+        # 4. Tune Vision Backbone (Unfreeze final layers for domain adaptation)
+        self._tune_vision_backbone(num_unfrozen_layers=2)
 
-    def _freeze_vision_backbone(self):
-        """Freezes the CLIP model parameters to prevent memory spikes during training."""
+    def _tune_vision_backbone(self, num_unfrozen_layers=2):
+        """Freezes early CLIP layers to save VRAM, but unfreezes the final layers for domain adaptation."""
+        # 1. Freeze everything first
         for param in self.clip_vision.parameters():
             param.requires_grad = False
+            
+        # 2. Dynamically locate the encoder layers to prevent version mismatch errors
+        encoder_layers = None
+        if hasattr(self.clip_vision, 'encoder'):
+            encoder_layers = self.clip_vision.encoder.layers
+        elif hasattr(self.clip_vision, 'vision_model'):
+            encoder_layers = self.clip_vision.vision_model.encoder.layers
+            
+        # 3. Unfreeze the final N transformer layers
+        if encoder_layers is not None:
+            for layer in encoder_layers[-num_unfrozen_layers:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
+        else:
+            print("Warning: Could not dynamically locate CLIP layers. Vision backbone is fully frozen.")
 
     def forward(self, input_ids, attention_mask, pixel_values):
         # --- ENCODER STAGE ---
