@@ -39,17 +39,20 @@ class MultiModalDataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         image_inputs = self.image_processor(images=image, return_tensors="pt")
 
-        # 3. Align Slot Labels with BERT Special Tokens ([CLS] ... [SEP] [PAD])
+        # 3. Dynamic Sub-Word Token Alignment
         raw_slots = json.loads(row["slot_ids"]) if isinstance(row["slot_ids"], str) else row["slot_ids"]
+        word_ids = text_encoding.word_ids(batch_index=0)
         
-        # -100 is ignored by PyTorch CrossEntropyLoss
-        aligned_slots = [-100] + list(raw_slots) + [-100]
-        
-        # Pad or truncate to max_length
-        if len(aligned_slots) < self.max_length:
-            aligned_slots += [-100] * (self.max_length - len(aligned_slots))
-        else:
-            aligned_slots = aligned_slots[:self.max_length]
+        aligned_slots = []
+        for word_idx in word_ids:
+            if word_idx is None:
+                # Special tokens like [CLS], [SEP], [PAD] get -100
+                aligned_slots.append(-100)
+            elif word_idx < len(raw_slots):
+                # Map the sub-word to its parent word's slot label
+                aligned_slots.append(raw_slots[word_idx])
+            else:
+                aligned_slots.append(-100)
 
         return {
             "input_ids": text_encoding["input_ids"].squeeze(0),

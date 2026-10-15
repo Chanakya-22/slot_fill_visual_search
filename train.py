@@ -33,6 +33,13 @@ def train_single_model(model_name, model, train_loader, val_loader):
     total_steps = len(train_loader) * EPOCHS
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=int(0.1 * total_steps), num_training_steps=total_steps)
 
+    # --- Early Stopping Initialization ---
+    best_slot_f1 = 0.0
+    patience = 2
+    patience_counter = 0
+    best_model_state = None
+    final_intent_acc = 0.0
+
     for epoch in range(1, EPOCHS + 1):
         model.train()
         total_train_loss = 0.0
@@ -95,14 +102,32 @@ def train_single_model(model_name, model, train_loader, val_loader):
 
         intent_metrics = compute_intent_metrics(all_intent_preds, all_intent_targets)
         slot_metrics = compute_slot_metrics(all_slot_preds, all_slot_targets)
+        current_f1 = slot_metrics['slot_f1']
 
         print(f"Epoch {epoch}/{EPOCHS} | Train Loss: {avg_train_loss:.4f} | "
               f"Val Intent Acc: {intent_metrics['accuracy']*100:.2f}% | "
-              f"Val Slot F1: {slot_metrics['slot_f1']:.4f}")
+              f"Val Slot F1: {current_f1:.4f}")
+
+        # --- EARLY STOPPING LOGIC ---
+        if current_f1 > best_slot_f1:
+            best_slot_f1 = current_f1
+            final_intent_acc = intent_metrics['accuracy'] * 100
+            patience_counter = 0
+            best_model_state = model.state_dict().copy()
+        else:
+            patience_counter += 1
+            print(f"Early Stopping Counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print(f"Early stopping triggered for {model_name} at Epoch {epoch}.")
+                break
+
+    # Restore the best weights before returning
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
     return {
-        "final_intent_acc": intent_metrics["accuracy"] * 100,
-        "final_slot_f1": slot_metrics["slot_f1"],
+        "final_intent_acc": final_intent_acc,
+        "final_slot_f1": best_slot_f1,
         "model": model
     }
 
