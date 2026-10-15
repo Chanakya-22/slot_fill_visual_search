@@ -67,9 +67,14 @@ def predict(
     print(f"Target Image:     '{image_path}'")
     print(f"Predicted Intent: {INTENT_MAP.get(pred_intent_id, 'unknown')} (ID: {pred_intent_id})")
     print(f"Extracted Slots:  {extracted_slots if extracted_slots else 'None (all tokens tagged as O)'}")
+    return {
+        "intent_id": pred_intent_id,
+        "intent": INTENT_MAP.get(pred_intent_id, "unknown"),
+        "slot_predictions": extracted_slots,
+    }
 
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    sample_img = os.path.join(base_dir, "data", "raw", "images", "sample_000.jpg")
-    sample_text = "find this gear in titanium"
+    sample_img = os.path.join(base_dir, "data", "raw", "images", "product_0000.png")
+    sample_text = "find a forest green spiral tooth gear"
     predict(sample_img, sample_text)

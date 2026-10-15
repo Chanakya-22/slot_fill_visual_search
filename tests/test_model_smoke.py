@@ -13,7 +13,8 @@ from src.labels import NUM_INTENTS, NUM_SLOT_LABELS
 from src.models.baseline_concat import BaselineConcatModel
 from src.models.baseline_text import BaselineTextModel
 from src.models.cross_attention_model import CrossAttentionModel
-from train import evaluate, train_single_model
+import predict
+from train import evaluate, train_single_model, _image_pairing_ablation
 
 
 class TinyBert(nn.Module):
@@ -59,6 +60,41 @@ class TinyClip(nn.Module):
         return SimpleNamespace(pooler_output=hidden.squeeze(1), last_hidden_state=patches)
 
 
+class FakePredictionTokenizer:
+    all_special_tokens = ["[CLS]", "[SEP]", "[PAD]"]
+
+    def __call__(self, *_args, **_kwargs):
+        return {
+            "input_ids": torch.tensor([[2, 6, 3, *([0] * 29)]]),
+            "attention_mask": torch.tensor([[1, 1, 1, *([0] * 29)]]),
+        }
+
+    def convert_ids_to_tokens(self, _input_ids):
+        return ["[CLS]", "gear", "[SEP]", *("[PAD]" for _ in range(29))]
+
+
+class FakePredictionProcessor:
+    def __call__(self, **_kwargs):
+        return {"pixel_values": torch.zeros((1, 3, 8, 8))}
+
+
+class FakePredictionModel(nn.Module):
+    def __init__(self, num_intents, num_slots):
+        super().__init__()
+        self.marker = nn.Parameter(torch.zeros(1))
+        self.num_intents = num_intents
+        self.num_slots = num_slots
+
+    def forward(self, input_ids, attention_mask, pixel_values):
+        intent_logits = torch.zeros((input_ids.shape[0], self.num_intents))
+        intent_logits[:, 2] = 1
+        slot_logits = torch.zeros(
+            (input_ids.shape[0], input_ids.shape[1], self.num_slots)
+        )
+        slot_logits[:, 1, 1] = 1
+        return intent_logits, slot_logits
+
+
 class ModelSmokeTests(unittest.TestCase):
     def test_each_architecture_trains_evaluates_saves_reloads_and_predicts(self):
         dataset = [
@@ -101,12 +137,17 @@ class ModelSmokeTests(unittest.TestCase):
                         )
                     self.assertTrue(all(torch.isfinite(output).all() for output in logits))
                     (logits[0].sum() + logits[1].sum()).backward()
+                    trainable_parameters = [
+                        parameter
+                        for parameter in model.parameters()
+                        if parameter.requires_grad
+                    ]
+                    self.assertTrue(trainable_parameters)
                     self.assertTrue(
-                        any(
+                        all(
                             parameter.grad is not None
                             and torch.isfinite(parameter.grad).all()
-                            for parameter in model.parameters()
-                            if parameter.requires_grad
+                            for parameter in trainable_parameters
                         )
                     )
 
@@ -200,6 +241,64 @@ class ModelSmokeTests(unittest.TestCase):
                 output_b = model(input_ids, attention_mask, image_b)
             self.assertFalse(torch.allclose(output_a[0], output_b[0]))
             self.assertFalse(torch.allclose(output_a[1], output_b[1]))
+            dataset = [
+                {
+                    "input_ids": input_ids.squeeze(0),
+                    "attention_mask": attention_mask.squeeze(0),
+                    "pixel_values": image_a.squeeze(0),
+                    "intent_label": torch.tensor(0),
+                    "slot_labels": torch.tensor([0, 1, 0, -100]),
+                }
+            ]
+            ablation = _image_pairing_ablation(
+                model,
+                DataLoader(dataset, batch_size=1),
+                torch.device("cpu"),
+                "CrossAttentionModel",
+            )
+            self.assertEqual(ablation["status"], "completed")
+            self.assertIn("zero", ablation["method"])
+            self.assertTrue(
+                torch.isfinite(
+                    torch.tensor(ablation["metrics"]["intent"]["macro_f1"])
+                )
+            )
+
+    def test_prediction_entrypoint_loads_checkpoint_and_returns_valid_labels(self):
+        with tempfile.TemporaryDirectory(prefix="predict-smoke-") as temp_dir:
+            image_path = Path(temp_dir) / "synthetic.png"
+            checkpoint_path = Path(temp_dir) / "trained.pt"
+            from PIL import Image
+
+            Image.new("RGB", (8, 8), (40, 80, 120)).save(image_path)
+            model = FakePredictionModel(NUM_INTENTS, NUM_SLOT_LABELS)
+            torch.save(
+                {"model_state_dict": model.state_dict(), "metadata": {"seed": 42}},
+                checkpoint_path,
+            )
+            with patch.object(
+                predict,
+                "AutoTokenizer",
+                SimpleNamespace(from_pretrained=lambda _name: FakePredictionTokenizer()),
+            ), patch.object(
+                predict,
+                "AutoProcessor",
+                SimpleNamespace(from_pretrained=lambda _name: FakePredictionProcessor()),
+            ), patch.object(predict, "CrossAttentionModel", FakePredictionModel):
+                output = predict.predict(
+                    image_path,
+                    "gear",
+                    model_path=str(checkpoint_path),
+                )
+            self.assertEqual(output["intent_id"], 2)
+            self.assertIn(output["intent"], {
+                "search_product",
+                "troubleshoot_product",
+                "identify_product",
+                "check_compatibility",
+                "request_specifications",
+            })
+            self.assertEqual(output["slot_predictions"], ["gear -> B-CATEGORY"])
 
 
 if __name__ == "__main__":

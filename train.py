@@ -1,8 +1,11 @@
 """Train and evaluate intent/slot models on reproducible grouped splits."""
 
 import argparse
+import gc
+import hashlib
 import json
 import os
+import platform
 import random
 import time
 from collections import Counter
@@ -11,13 +14,19 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import GroupShuffleSplit
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Subset
 from transformers import get_linear_schedule_with_warmup
 
 from src.dataset import MultiModalDataset
-from src.labels import INTENT_ID_TO_NAME, NUM_INTENTS, NUM_SLOT_LABELS
+from src.labels import (
+    INTENT_ID_TO_NAME,
+    NUM_INTENTS,
+    NUM_SLOT_LABELS,
+    SLOT_ID_TO_TAG,
+)
 from src.models.baseline_concat import BaselineConcatModel
 from src.models.baseline_text import BaselineTextModel
 from src.models.cross_attention_model import CrossAttentionModel
@@ -261,22 +270,149 @@ def _forward(model, batch, device):
     return model(input_ids, attention_mask, batch["pixel_values"].to(device))
 
 
-def evaluate(model, data_loader, device):
+def evaluate(model, data_loader, device, include_examples=False, zero_images=False):
     model.eval()
     intent_predictions = []
     intent_targets = []
     slot_predictions = []
     slot_targets = []
+    sample_ids = []
+    text_queries = []
+    product_ids = []
+    input_token_ids = []
     with torch.no_grad():
         for batch in data_loader:
-            intent_logits, slot_logits = _forward(model, batch, device)
+            eval_batch = batch
+            if zero_images:
+                eval_batch = dict(batch)
+                eval_batch["pixel_values"] = torch.zeros_like(batch["pixel_values"])
+            intent_logits, slot_logits = _forward(model, eval_batch, device)
             intent_predictions.extend(intent_logits.argmax(dim=-1).cpu().tolist())
             intent_targets.extend(batch["intent_label"].cpu().tolist())
             slot_predictions.extend(slot_logits.argmax(dim=-1).cpu().tolist())
             slot_targets.extend(batch["slot_labels"].cpu().tolist())
-    return {
+            sample_ids.extend(batch.get("sample_id", []))
+            text_queries.extend(batch.get("text_query", []))
+            product_ids.extend(batch.get("product_id", []))
+            input_token_ids.extend(batch["input_ids"].cpu().tolist())
+
+    result = {
         "intent": compute_intent_metrics(intent_predictions, intent_targets),
         "slots": compute_slot_metrics(slot_predictions, slot_targets),
+        "intent_confusion_matrix": confusion_matrix(
+            intent_targets,
+            intent_predictions,
+            labels=list(INTENT_ID_TO_NAME),
+        ).tolist(),
+    }
+    if include_examples and sample_ids:
+        dataset = data_loader.dataset
+        while isinstance(dataset, Subset):
+            dataset = dataset.dataset
+        tokenizer = getattr(dataset, "tokenizer", None)
+        examples = []
+        for index, (sample_id, text_query, product_id) in enumerate(
+            zip(sample_ids, text_queries, product_ids)
+        ):
+            target_slot_ids = slot_targets[index]
+            predicted_slot_ids = slot_predictions[index]
+            active_positions = [
+                position
+                for position, target_id in enumerate(target_slot_ids)
+                if target_id != -100
+            ]
+            tokens = (
+                tokenizer.convert_ids_to_tokens(
+                    [input_token_ids[index][position] for position in active_positions]
+                )
+                if tokenizer is not None
+                else [str(position) for position in active_positions]
+            )
+            target_tags = [
+                SLOT_ID_TO_TAG[target_slot_ids[position]]
+                for position in active_positions
+            ]
+            predicted_tags = [
+                SLOT_ID_TO_TAG[predicted_slot_ids[position]]
+                for position in active_positions
+            ]
+            examples.append(
+                {
+                    "sample_id": sample_id,
+                    "product_id": product_id,
+                    "text_query": text_query,
+                    "intent_true_id": int(intent_targets[index]),
+                    "intent_true": INTENT_ID_TO_NAME[int(intent_targets[index])],
+                    "intent_predicted_id": int(intent_predictions[index]),
+                    "intent_predicted": INTENT_ID_TO_NAME[
+                        int(intent_predictions[index])
+                    ],
+                    "intent_correct": int(intent_targets[index])
+                    == int(intent_predictions[index]),
+                    "slot_tokens": tokens,
+                    "slot_true_tags": target_tags,
+                    "slot_predicted_tags": predicted_tags,
+                    "slots_correct": target_tags == predicted_tags,
+                }
+            )
+        result["examples"] = examples
+    return result
+
+
+def _dataset_provenance(csv_path):
+    summary_path = csv_path.parent / "dataset_summary.json"
+    catalogue_path = csv_path.parent / "catalogue.json"
+    summary = (
+        json.loads(summary_path.read_text(encoding="utf-8"))
+        if summary_path.is_file()
+        else None
+    )
+    return {
+        "dataset_version": (summary or {}).get("image_generation_method", "unknown"),
+        "dataset_summary": summary,
+        "dataset_csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+        "catalogue_sha256": hashlib.sha256(catalogue_path.read_bytes()).hexdigest()
+        if catalogue_path.is_file()
+        else None,
+    }
+
+
+def _parameter_counts(model):
+    counts = {
+        "total": sum(parameter.numel() for parameter in model.parameters()),
+        "trainable": sum(
+            parameter.numel()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ),
+        "backbones": {},
+    }
+    for name in ("bert", "clip_vision"):
+        backbone = getattr(model, name, None)
+        if backbone is None:
+            counts["backbones"][name] = {"present": False}
+            continue
+        counts["backbones"][name] = {
+            "present": True,
+            "total": sum(parameter.numel() for parameter in backbone.parameters()),
+            "trainable": sum(
+                parameter.numel()
+                for parameter in backbone.parameters()
+                if parameter.requires_grad
+            ),
+        }
+    return counts
+
+
+def _image_pairing_ablation(model, test_loader, device, model_name):
+    if model_name == "BaselineTextModel":
+        return {"status": "not_applicable", "reason": "text-only architecture"}
+    metrics = evaluate(model, test_loader, device, zero_images=True)
+    metrics.pop("examples", None)
+    return {
+        "status": "completed",
+        "method": "replace normalized pixel_values with zeros at evaluation",
+        "metrics": metrics,
     }
 
 
@@ -309,6 +445,7 @@ def measure_inference_latency(model, dataset, device, warmup_runs=2, timed_runs=
         "warmup_runs": warmup_runs,
         "timed_runs": timed_runs,
         "device": str(device),
+        "latency_scope": "model_forward_and_device_transfer; preprocessing excluded",
     }
 
 
@@ -350,6 +487,7 @@ def train_single_model(
     best_state = None
     best_epoch = 0
     best_validation_metrics = None
+    epoch_history = []
     epochs_without_improvement = 0
     started = time.perf_counter()
 
@@ -383,6 +521,13 @@ def train_single_model(
             f"val_intent_macro_f1={validation_metrics['intent']['macro_f1']:.4f} "
             f"val_slot_entity_f1={validation_slot_f1:.4f}"
         )
+        epoch_history.append(
+            {
+                "epoch": epoch,
+                "train_loss": average_loss,
+                "validation_metrics": validation_metrics,
+            }
+        )
 
         if validation_slot_f1 > best_slot_f1:
             best_slot_f1 = validation_slot_f1
@@ -403,6 +548,7 @@ def train_single_model(
                     "best_epoch": best_epoch,
                     "checkpoint_selection_metric": "validation.slots.slot_f1",
                     "validation_metrics": best_validation_metrics,
+                    "epoch_history": epoch_history,
                 },
             )
         else:
@@ -426,12 +572,14 @@ def train_single_model(
             "training_time_seconds": training_time_seconds,
             "checkpoint_selection_metric": "validation.slots.slot_f1",
             "validation_metrics": best_validation_metrics,
+            "epoch_history": epoch_history,
         },
     )
     return {
         "model": model,
         "best_epoch": best_epoch,
         "validation_metrics": best_validation_metrics,
+        "epoch_history": epoch_history,
         "training_time_seconds": training_time_seconds,
         "checkpoint_path": checkpoint_path,
     }
@@ -440,6 +588,79 @@ def train_single_model(
 def _make_model(model_name):
     model_type = MODEL_TYPES[model_name]
     return model_type(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)
+
+
+def _run_experiment_model(
+    model_name,
+    train_set,
+    validation_set,
+    test_set,
+    device,
+    seed,
+    split_mode,
+    batch_size,
+    epochs,
+    patience,
+    output_dir,
+    base_dir,
+):
+    seed_everything(seed)
+    loader_generator = torch.Generator().manual_seed(seed)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=loader_generator,
+    )
+    validation_loader = DataLoader(
+        validation_set, batch_size=batch_size, shuffle=False
+    )
+    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
+    checkpoint_path = output_dir / (
+        f"{model_name.lower()}_{split_mode}_seed{seed}.pt"
+    )
+    model = _make_model(model_name)
+    model_parameter_counts = _parameter_counts(model)
+    trained = train_single_model(
+        model_name=model_name,
+        model=model,
+        train_loader=train_loader,
+        validation_loader=validation_loader,
+        device=device,
+        seed=seed,
+        split_mode=split_mode,
+        epochs=epochs,
+        patience=patience,
+        checkpoint_path=checkpoint_path,
+    )
+    test_metrics = evaluate(
+        trained["model"], test_loader, device, include_examples=True
+    )
+    ablation = _image_pairing_ablation(
+        trained["model"], test_loader, device, model_name
+    )
+    latency = measure_inference_latency(trained["model"], test_set, device)
+    model_result = {
+        "status": "completed",
+        "model_name": model_name,
+        "dataset_split": split_mode,
+        "seed": seed,
+        "best_epoch": trained["best_epoch"],
+        "checkpoint_selection_metric": "validation.slots.slot_f1",
+        "validation_metrics": trained["validation_metrics"],
+        "test_metrics": test_metrics,
+        "image_pairing_ablation": ablation,
+        "training_time_seconds": trained["training_time_seconds"],
+        "inference_latency": latency,
+        "parameter_counts": model_parameter_counts,
+        "epoch_history": trained["epoch_history"],
+        "checkpoint_path": os.path.relpath(checkpoint_path, base_dir),
+    }
+    del model, trained, train_loader, validation_loader, test_loader
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return model_result
 
 
 def _write_json(path, value):
@@ -477,6 +698,8 @@ def main(argv=None):
 
     seed_everything(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cpu":
+        torch.set_num_threads(min(8, torch.get_num_threads()))
     base_dir = Path(__file__).resolve().parent
     csv_path = args.csv.resolve()
     output_dir = (args.output_dir or base_dir / "data" / "processed").resolve()
@@ -499,72 +722,93 @@ def main(argv=None):
     results = {
         "dataset_path": os.path.relpath(csv_path, base_dir),
         "seed": args.seed,
+        "dataset_provenance": _dataset_provenance(csv_path),
         "dataset_split": split_details,
         "device": str(device),
-        "models": [],
+        "runtime_environment": {
+            "python": platform.python_version(),
+            "pytorch": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_version": torch.version.cuda,
+            "gpu_name": torch.cuda.get_device_name(0)
+            if torch.cuda.is_available()
+            else None,
+            "cpu": platform.processor(),
+        },
+        "training_configuration": {
+            "batch_size": args.batch_size,
+            "learning_rate": LR,
+            "lambda_slot": LAMBDA_SLOT,
+            "max_epochs": args.epochs,
+            "early_stopping_patience": args.patience,
+            "checkpoint_selection_metric": "validation.slots.slot_f1",
+            "text_encoder": "bert-base-uncased",
+            "vision_encoder": "openai/clip-vit-base-patch32",
+            "cpu_threads": torch.get_num_threads()
+            if device.type == "cpu"
+            else None,
+        },
+        "intent_labels": [
+            INTENT_ID_TO_NAME[intent_id]
+            for intent_id in INTENT_ID_TO_NAME
+        ],
+        "models": [
+            {"model_name": model_name, "status": "pending"}
+            for model_name in model_names
+        ],
     }
+    _write_json(results_path, results)
 
     for model_name in model_names:
-        seed_everything(args.seed)
-        loader_generator = torch.Generator().manual_seed(args.seed)
-        train_loader = DataLoader(
-            train_set,
-            batch_size=args.batch_size,
-            shuffle=True,
-            generator=loader_generator,
+        model_result = next(
+            result for result in results["models"]
+            if result["model_name"] == model_name
         )
-        validation_loader = DataLoader(
-            validation_set, batch_size=args.batch_size, shuffle=False
-        )
-        test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
-        checkpoint_path = output_dir / (
-            f"{model_name.lower()}_{args.split_mode}_seed{args.seed}.pt"
-        )
-        trained = train_single_model(
-            model_name=model_name,
-            model=_make_model(model_name),
-            train_loader=train_loader,
-            validation_loader=validation_loader,
-            device=device,
-            seed=args.seed,
-            split_mode=args.split_mode,
-            epochs=args.epochs,
-            patience=args.patience,
-            checkpoint_path=checkpoint_path,
-        )
-
-        test_metrics = evaluate(trained["model"], test_loader, device)
-        latency = measure_inference_latency(
-            trained["model"], test_set, device
-        )
-        model_result = {
-            "model_name": model_name,
-            "dataset_split": split_details["mode"],
-            "seed": args.seed,
-            "best_epoch": trained["best_epoch"],
-            "checkpoint_selection_metric": "validation.slots.slot_f1",
-            "validation_metrics": trained["validation_metrics"],
-            "test_metrics": test_metrics,
-            "training_time_seconds": trained["training_time_seconds"],
-            "inference_latency": latency,
-            "checkpoint_path": os.path.relpath(checkpoint_path, base_dir),
-        }
-        results["models"] = [
-            previous
-            for previous in results["models"]
-            if previous["model_name"] != model_name
-        ]
-        results["models"].append(model_result)
+        model_result["status"] = "in_progress"
         _write_json(results_path, results)
+        try:
+            completed_result = _run_experiment_model(
+                model_name=model_name,
+                train_set=train_set,
+                validation_set=validation_set,
+                test_set=test_set,
+                device=device,
+                seed=args.seed,
+                split_mode=args.split_mode,
+                batch_size=args.batch_size,
+                epochs=args.epochs,
+                patience=args.patience,
+                output_dir=output_dir,
+                base_dir=base_dir,
+            )
+        except Exception as exc:
+            model_result.update(
+                {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                }
+            )
+            _write_json(results_path, results)
+            print(
+                f"ERROR: {model_name} failed ({type(exc).__name__}): {exc}",
+                flush=True,
+            )
+            raise
+        model_result.clear()
+        model_result.update(completed_result)
+        _write_json(results_path, results)
+        test_metrics = completed_result["test_metrics"]
         print(
             f"{model_name}: test_intent_accuracy="
             f"{test_metrics['intent']['accuracy']:.4f}, "
             f"test_intent_macro_f1={test_metrics['intent']['macro_f1']:.4f}, "
             f"test_slot_entity_f1={test_metrics['slots']['slot_f1']:.4f}, "
-            f"training_time={trained['training_time_seconds']:.2f}s, "
-            f"inference_latency={latency['mean_batch_latency_ms']:.2f}ms"
+            f"training_time={completed_result['training_time_seconds']:.2f}s, "
+            f"inference_latency="
+            f"{completed_result['inference_latency']['mean_batch_latency_ms']:.2f}ms"
         )
-    print(f"Actual measured results written to {results_path}")
+    print(f"Experiment result state written to {results_path}")
 
 
 if __name__ == "__main__":

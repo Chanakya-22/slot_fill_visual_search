@@ -95,6 +95,24 @@ with the shared product-group splits when ready:
 .\venv\Scripts\python.exe train.py --models all --split-mode product --seed 42
 ```
 
+The primary run writes an experiment JSON containing the exact shared split,
+training configuration, per-epoch train/validation history, validation-selected
+checkpoint, test metrics, intent confusion matrices, test predictions,
+checkpoint paths, parameter counts, measured training time, and model-forward
+batch-size-one latency (preprocessing excluded). Multimodal models also report
+a zero-normalized-image test ablation; it is not applicable to the text-only
+model. Run the report generator after training to create a comparison CSV,
+metric and learning-curve plots, confusion-matrix plots, and an error-analysis
+JSON:
+
+```powershell
+.\venv\Scripts\python.exe benchmark_results.py data\processed\experiment_results_product_seed42.json
+```
+
+The experiment JSON is written with `pending`/`in_progress` states before
+training starts. If execution is interrupted, unfinished models remain
+explicitly marked; plots and comparison rows include completed models only.
+
 To evaluate query-template generalization instead, use
 `--split-mode template`; that mode reserves disjoint template groups and uses
 50/25/25 train/validation/test proportions so every intent is represented in

@@ -150,4 +150,11 @@ class MultiModalDataset(Dataset):
             "pixel_values": image_inputs["pixel_values"].squeeze(0),
             "intent_label": torch.tensor(intent_id, dtype=torch.long),
             "slot_labels": torch.tensor(aligned_slots, dtype=torch.long),
+            "sample_id": str(row["sample_id"])
+            if "sample_id" in row.index
+            else str(row.name),
+            "text_query": text,
+            "product_id": str(row["product_id"])
+            if "product_id" in row.index
+            else "",
         }
