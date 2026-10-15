@@ -45,7 +45,9 @@ is whitespace-tokenized and exactly reconstructs `text_query`; `slot_tags`
 contains one BIO tag per query token. The loader tokenizes this explicit word
 list with the fast BERT tokenizer and `word_ids()`, marks special/padding
 positions `-100`, and converts additional WordPieces inside a BIO entity to
-the corresponding `I-` label.
+the corresponding `I-` label. Rows with a `product_id` must reference exactly
+`images/{product_id}.png`, so unreferenced legacy image aliases cannot enter
+the active multimodal dataset through a mismatched CSV path.
 
 Intent IDs are defined in `src/labels.py`:
 

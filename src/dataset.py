@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +69,20 @@ class MultiModalDataset(Dataset):
                 f"Token/slot length mismatch in row {row.name}: {len(tokens)} tokens, "
                 f"{len(slot_tags)} labels."
             )
+        previous_entity_type = None
+        for tag in slot_tags:
+            if tag == "O":
+                previous_entity_type = None
+                continue
+            prefix, entity_type = tag.split("-", 1)
+            if prefix == "B":
+                previous_entity_type = entity_type
+            elif prefix == "I" and previous_entity_type == entity_type:
+                previous_entity_type = entity_type
+            else:
+                raise ValueError(
+                    f"Invalid BIO transition in row {row.name}: {tag}."
+                )
         return text, tokens, slot_tags
 
     def __getitem__(self, idx):
@@ -95,6 +110,22 @@ class MultiModalDataset(Dataset):
             previous_word_id = word_idx
 
         image_path = Path(str(row["image_path"]))
+        if "product_id" in row.index:
+            product_id = row["product_id"]
+            if (
+                not isinstance(product_id, str)
+                or re.fullmatch(r"product_\d{4}", product_id) is None
+            ):
+                raise ValueError(
+                    f"Non-canonical product ID in row {row.name}: {product_id!r}."
+                )
+            canonical_path = self.csv_path.parent / "images" / f"{product_id}.png"
+            if image_path != Path("images") / f"{product_id}.png":
+                raise ValueError(
+                    f"Product image path in row {row.name} must be canonical: "
+                    f"images/{product_id}.png."
+                )
+            image_path = canonical_path
         if not image_path.is_absolute():
             image_path = self.csv_path.parent / image_path
         if not image_path.is_file():

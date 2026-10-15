@@ -378,7 +378,19 @@ def validate_wordpiece_masking() -> None:
 
     from src.dataset import MultiModalDataset
 
-    vocabulary = ("[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "find", "un", "##break", "##able")
+    vocabulary = (
+        "[PAD]",
+        "[UNK]",
+        "[CLS]",
+        "[SEP]",
+        "[MASK]",
+        "find",
+        "un",
+        "##break",
+        "##able",
+        "forest",
+        "##green",
+    )
 
     class StubImageProcessor:
         def __call__(self, images, return_tensors):
@@ -406,11 +418,17 @@ def validate_wordpiece_masking() -> None:
         dataset_path = root / "dataset.csv"
         record = {
             "image_path": "images/probe.png",
-            "text_query": "find unbreakable",
+            "text_query": "find unbreakable forestgreen",
             "intent_id": 0,
-            "slot_ids": json.dumps([0, SLOT_TAG_TO_ID["B-CATEGORY"]]),
-            "tokens": json.dumps(["find", "unbreakable"]),
-            "slot_tags": json.dumps(["O", "B-CATEGORY"]),
+            "slot_ids": json.dumps(
+                [
+                    SLOT_TAG_TO_ID["O"],
+                    SLOT_TAG_TO_ID["B-CATEGORY"],
+                    SLOT_TAG_TO_ID["B-COLOR"],
+                ]
+            ),
+            "tokens": json.dumps(["find", "unbreakable", "forestgreen"]),
+            "slot_tags": json.dumps(["O", "B-CATEGORY", "B-COLOR"]),
             "intent": "search_product",
         }
         with dataset_path.open("w", newline="", encoding="utf-8") as dataset_file:
@@ -420,17 +438,49 @@ def validate_wordpiece_masking() -> None:
 
         dataset = MultiModalDataset(
             dataset_path,
-            max_length=8,
+            max_length=10,
             tokenizer=tokenizer,
             image_processor=StubImageProcessor(),
         )
         sample = dataset[0]
         actual_labels = sample["slot_labels"].tolist()
-        expected_labels = [-100, 0, 1, 2, 2, -100, -100, -100]
+        expected_labels = [
+            -100,
+            SLOT_TAG_TO_ID["O"],
+            SLOT_TAG_TO_ID["B-CATEGORY"],
+            SLOT_TAG_TO_ID["I-CATEGORY"],
+            SLOT_TAG_TO_ID["I-CATEGORY"],
+            SLOT_TAG_TO_ID["B-COLOR"],
+            SLOT_TAG_TO_ID["I-COLOR"],
+            -100,
+            -100,
+            -100,
+        ]
         if actual_labels != expected_labels:
             raise ValueError(f"WordPiece/special/padding alignment failed: {actual_labels}.")
-        if sample["attention_mask"].tolist() != [1, 1, 1, 1, 1, 1, 0, 0]:
+        if sample["attention_mask"].tolist() != [1, 1, 1, 1, 1, 1, 1, 1, 0, 0]:
             raise ValueError("Tokenizer special-token or padding attention mask is incorrect.")
+
+        record["product_id"] = "product_0000"
+        record["image_path"] = "images/product_000.png"
+        Image.new("RGB", (224, 224), (0, 0, 0)).save(images_dir / "product_000.png")
+        with dataset_path.open("w", newline="", encoding="utf-8") as dataset_file:
+            writer = csv.DictWriter(dataset_file, fieldnames=record)
+            writer.writeheader()
+            writer.writerow(record)
+        aliased_dataset = MultiModalDataset(
+            dataset_path,
+            max_length=10,
+            tokenizer=tokenizer,
+            image_processor=StubImageProcessor(),
+        )
+        try:
+            aliased_dataset[0]
+        except ValueError as exc:
+            if "must be canonical" not in str(exc):
+                raise
+        else:
+            raise ValueError("The active dataset loader accepted a legacy image alias.")
 
 
 def main() -> None:
