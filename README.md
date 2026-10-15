@@ -132,3 +132,10 @@ train models or download pretrained weights.
 `benchmark_sota.py` is explicitly compute-only: it uses random tensor inputs
 and a randomly initialized ViLT model. Its output is not a task-quality
 comparison or evidence of memory savings.
+
+Completed seed-42 product-held-out and template-held-out measurements,
+plots, error analysis, and limitations are documented in the
+[synthetic benchmark report](./docs/synthetic-benchmark-report.md). The
+machine-readable result records and generated figures are included in
+[`docs/benchmark-artifacts`](./docs/benchmark-artifacts/); no checkpoints are
+committed.
