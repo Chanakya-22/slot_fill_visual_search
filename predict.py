@@ -3,23 +3,12 @@ import torch
 from PIL import Image
 from transformers import AutoTokenizer, AutoProcessor
 from src.models.cross_attention_model import CrossAttentionModel
+from src.labels import INTENT_ID_TO_NAME, NUM_INTENTS, NUM_SLOT_LABELS, SLOT_ID_TO_TAG
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-INTENT_MAP = {
-    0: "find_similar_product",
-    1: "check_material_compatibility",
-    2: "request_replacement_part",
-    3: "search_matching_hardware",
-    4: "query_part_specifications"
-}
-
-SLOT_MAP = {
-    0: "O",
-    1: "B-Item",
-    2: "B-Material",
-    3: "I-Material"
-}
+INTENT_MAP = INTENT_ID_TO_NAME
+SLOT_MAP = SLOT_ID_TO_TAG
 
 def predict(image_path, text_query, model_path="data/processed/cross_attention_model.pt"):
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +18,7 @@ def predict(image_path, text_query, model_path="data/processed/cross_attention_m
     processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
     # Load Model
-    model = CrossAttentionModel(num_intents=5, num_slots=4)
+    model = CrossAttentionModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)
     if os.path.exists(checkpoint):
         model.load_state_dict(torch.load(checkpoint, map_location=DEVICE))
         print("Loaded trained model weights successfully.")

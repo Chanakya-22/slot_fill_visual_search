@@ -1,8 +1,13 @@
 import os
+import copy
+import random
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 from torch.optim import AdamW
+from sklearn.model_selection import GroupShuffleSplit
 from transformers import get_linear_schedule_with_warmup
 
 from src.dataset import MultiModalDataset
@@ -10,6 +15,7 @@ from src.models.baseline_text import BaselineTextModel
 from src.models.baseline_concat import BaselineConcatModel
 from src.models.cross_attention_model import CrossAttentionModel
 from src.utils import compute_intent_metrics, compute_slot_metrics
+from src.labels import NUM_INTENTS, NUM_SLOT_LABELS
 
 # --- Configuration ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -17,6 +23,30 @@ EPOCHS = 5
 BATCH_SIZE = 8
 LR = 3e-5
 LAMBDA_SLOT = 1.0  # Joint loss balance parameter
+SEED = 42
+
+
+def split_dataset(dataset, validation_fraction=0.2, seed=SEED):
+    validation_size = validation_fraction
+    if not 0 < validation_size < 1:
+        raise ValueError("validation_fraction must be between 0 and 1.")
+    if "product_id" in dataset.df.columns:
+        splitter = GroupShuffleSplit(
+            n_splits=1, test_size=validation_size, random_state=seed
+        )
+        train_indices, val_indices = next(
+            splitter.split(range(len(dataset)), groups=dataset.df["product_id"])
+        )
+        return Subset(dataset, train_indices.tolist()), Subset(dataset, val_indices.tolist()), True
+
+    train_size = int((1.0 - validation_size) * len(dataset))
+    val_size = len(dataset) - train_size
+    split_generator = torch.Generator().manual_seed(seed)
+    train_dataset, val_dataset = random_split(
+        dataset, [train_size, val_size], generator=split_generator
+    )
+    return train_dataset, val_dataset, False
+
 
 def train_single_model(model_name, model, train_loader, val_loader):
     print(f"\n==========================================")
@@ -113,7 +143,7 @@ def train_single_model(model_name, model, train_loader, val_loader):
             best_slot_f1 = current_f1
             final_intent_acc = intent_metrics['accuracy'] * 100
             patience_counter = 0
-            best_model_state = model.state_dict().copy()
+            best_model_state = copy.deepcopy(model.state_dict())
         else:
             patience_counter += 1
             print(f"Early Stopping Counter: {patience_counter}/{patience}")
@@ -132,24 +162,38 @@ def train_single_model(model_name, model, train_loader, val_loader):
     }
 
 def main():
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(base_dir, "data", "raw", "dataset.csv")
 
     dataset = MultiModalDataset(csv_path)
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    train_dataset, val_dataset, grouped_split = split_dataset(dataset, seed=SEED)
+    if grouped_split:
+        print("Using a seeded product-group split to prevent product/image leakage.")
+    else:
+        print("Warning: product_id is absent; using a seeded row split for this legacy dataset.")
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    loader_generator = torch.Generator().manual_seed(SEED)
+    train_loader = DataLoader(
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, generator=loader_generator
+    )
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    print(f"Loaded {len(dataset)} samples. (Train: {train_size}, Val: {val_size}) using device: {DEVICE}")
+    print(
+        f"Loaded {len(dataset)} samples. (Train: {len(train_dataset)}, "
+        f"Val: {len(val_dataset)}) using device: {DEVICE}"
+    )
 
     # Benchmark All Three Models
     models_to_benchmark = [
-        ("BaselineTextModel", BaselineTextModel(num_intents=5, num_slots=4)),
-        ("BaselineConcatModel", BaselineConcatModel(num_intents=5, num_slots=4)),
-        ("CrossAttentionModel (Proposed)", CrossAttentionModel(num_intents=5, num_slots=4))
+        ("BaselineTextModel", BaselineTextModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)),
+        ("BaselineConcatModel", BaselineConcatModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)),
+        ("CrossAttentionModel (Proposed)", CrossAttentionModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS))
     ]
 
     results = []

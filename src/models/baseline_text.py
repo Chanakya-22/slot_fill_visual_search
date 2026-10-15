@@ -2,8 +2,11 @@ import torch
 import torch.nn as nn
 from transformers import BertModel
 
+from src.labels import NUM_SLOT_LABELS
+
+
 class BaselineTextModel(nn.Module):
-    def __init__(self, num_intents=5, num_slots=4, model_name="bert-base-uncased"):
+    def __init__(self, num_intents=5, num_slots=NUM_SLOT_LABELS, model_name="bert-base-uncased"):
         super(BaselineTextModel, self).__init__()
         self.bert = BertModel.from_pretrained(model_name)
         

@@ -1,46 +1,87 @@
 # Multi-Modal Intent Classification and Slot Filling for Visual Search
 
-This repository contains an initial PyTorch and Hugging Face multimodal project scaffold for visual search understanding. The project is based on the ideas captured in the zeroth review document provided in the workspace.
+This project studies joint intent classification and slot filling for visual
+search with pretrained BERT and CLIP encoders and three retained architectures:
+text-only BERT, BERT/CLIP concatenation, and BERT/CLIP cross-attention.
 
-## Project Summary
+## Synthetic data only
 
-The goal is to move beyond text-only intent classification and slot filling by incorporating visual context from the image paired with a text query. In visual search settings, important clues are often embedded in the uploaded image, making text-only processing insufficient.
+The experiment uses no external datasets or real-world product images. Generate
+the local catalogue and 224 x 224 RGB images with:
 
-## Problem Definition
+```powershell
+.\venv\Scripts\python.exe prepare_hardware_data.py
+```
 
-The project targets a multi-modal input of the form:
+Generation is deterministic by default (`seed=42`) and produces 100 distinct
+procedural products with ten differently templated queries each (1,000
+examples). To regenerate with another seed or a smaller divisible sample:
 
-- Text query: $Q_{text}$
-- Image input: $I_{image}$
+```powershell
+.\venv\Scripts\python.exe prepare_hardware_data.py --seed 42 --num-samples 1000
+```
 
-The expected outputs are:
+The generator writes `data/raw/dataset.csv`, `data/raw/catalogue.json`,
+`data/raw/dataset_summary.json`, and one PNG per product under
+`data/raw/images/`. Product images are drawn locally with category-specific
+Pillow vector shapes, recorded color finishes, highlights, and hardware
+details. Material, price, and declared compatibility are structured catalogue
+metadata; they are not inferred from image pixels. Image paths in the CSV are
+relative to its directory so the generated dataset remains portable.
 
-- Intent prediction: $y_{intent}$
-- Slot predictions: $Y_{slots}$
+## Data contract and labels
 
-## Review-Inspired Approach
+The CSV keeps the loader's original `image_path`, `text_query`, `intent_id`,
+and `slot_ids` columns and adds `sample_id`, `product_id`, `intent`, `tokens`,
+`slot_tags`, `product_metadata`, and `generation_info`. Each query's token list
+is whitespace-tokenized and exactly reconstructs `text_query`; `slot_tags`
+contains one BIO tag per query token. The loader tokenizes this explicit word
+list with the fast BERT tokenizer and `word_ids()`, marks special/padding
+positions `-100`, and converts additional WordPieces inside a BIO entity to
+the corresponding `I-` label.
 
-The proposed approach is centered on a context-aware co-attention fusion strategy:
+Intent IDs are defined in `src/labels.py`:
 
-- Text encoder: BERT-style language modeling
-- Vision encoder: CLIP-style visual embeddings
-- Fusion: cross-attention between text and image representations
-- Outputs: intent classification and slot filling heads
+| ID | Intent |
+|---:|---|
+| 0 | `search_product` |
+| 1 | `troubleshoot_product` |
+| 2 | `identify_product` |
+| 3 | `check_compatibility` |
+| 4 | `request_specifications` |
 
-## Repository Structure
+The slot IDs in the same module map to `O`, `B-/I-CATEGORY`,
+`B-/I-COLOR`, `B-/I-SHAPE`, `B-/I-MATERIAL`, and `B-/I-PRICE`.
+The four-column CSV layout remains supported: legacy intent IDs retain their
+existing purchase, troubleshoot, identify, compatibility, and specification
+meanings, and legacy `slot_ids` values map to `O`, `B-CATEGORY`, and
+`B-MATERIAL`. Regenerated rows include explicit `slot_tags`; new `slot_ids`
+therefore use the complete BIO label map, and model slot heads now use its
+full size. Price requests are represented as specification requests and carry
+an explicit `PRICE` slot.
 
-The project currently includes:
+## Validation and experiment safeguards
 
-- a mock data generation pipeline
-- a multimodal dataset loader
-- starter model modules under the src package
-- training and prediction entry points
+Run dataset checks and focused tests:
 
-## Next Steps
+```powershell
+.\venv\Scripts\python.exe validate_synthetic_dataset.py
+.\venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-The next phase will focus on:
+The validator checks schema and label validity, existing images, image
+dimensions, token/tag alignment, intent/template/product diversity, exact
+record uniqueness, and fixed-seed reproducibility. Training uses a seeded
+product-group split when product IDs are available, preventing the same
+product image from appearing on both sides of the split. Slot F1 is exact
+BIO-entity micro F1; token accuracy is reported separately.
 
-- implementing the training loop
-- refining the multimodal architecture
-- evaluating the mock data pipeline
-- expanding the dataset and model components
+These generated examples are suitable for pipeline and controlled-method
+checks only. Their labels, images, wording, attributes, and compatibility are
+procedurally linked, so scores on this synthetic set are not evidence of
+real-world product-search performance. The generator and validator do not
+train models or download pretrained weights.
+
+`benchmark_sota.py` is explicitly compute-only: it uses random tensor inputs
+and a randomly initialized ViLT model. Its output is not a task-quality
+comparison or evidence of memory savings.

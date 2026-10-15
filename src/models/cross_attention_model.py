@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 from transformers import BertModel, CLIPVisionModel
 
+from src.labels import NUM_SLOT_LABELS
+
+
 class LinearCrossAttention(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -28,7 +31,7 @@ class LinearCrossAttention(nn.Module):
         return attn_output
 
 class CrossAttentionModel(nn.Module):
-    def __init__(self, num_intents=5, num_slots=4, text_model="bert-base-uncased", vision_model="openai/clip-vit-base-patch32"):
+    def __init__(self, num_intents=5, num_slots=NUM_SLOT_LABELS, text_model="bert-base-uncased", vision_model="openai/clip-vit-base-patch32"):
         super(CrossAttentionModel, self).__init__()
         
         self.bert = BertModel.from_pretrained(text_model)

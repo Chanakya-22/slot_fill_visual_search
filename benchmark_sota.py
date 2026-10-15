@@ -2,6 +2,7 @@ import time
 import torch
 from transformers import ViltModel, ViltConfig
 from src.models.cross_attention_model import CrossAttentionModel
+from src.labels import NUM_INTENTS, NUM_SLOT_LABELS
 
 def get_param_counts(model):
     total = sum(p.numel() for p in model.parameters())
@@ -32,10 +33,11 @@ def measure_inference_latency(model, inputs, device, num_runs=100):
     return ((end_time - start_time) / num_runs) * 1000
 
 def main():
-    print("Initializing SOTA Benchmarking Suite...")
+    print("Initializing compute-only model profiling (not a task-quality benchmark)...")
+    print("Inputs are random tensors and ViLT is initialized from config without pretrained weights.")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    proposed_model = CrossAttentionModel(num_intents=5, num_slots=4)
+    proposed_model = CrossAttentionModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)
     
     # Freeze early BERT layers to match CLIP strategy for ultimate efficiency
     for param in proposed_model.bert.parameters():
@@ -61,16 +63,14 @@ def main():
     vlm_latency = measure_inference_latency(vlm_model, inputs, device)
     
     print("\n" + "="*75)
-    print("                 PHASE 8: SOTA VLM COMPARISON BENCHMARK                  ")
+    print("              MODEL SIZE AND FORWARD-PASS PROFILE ONLY                   ")
     print("="*75)
     print(f"{'Model Architecture':<32} | {'Total Params':<14} | {'Trainable':<10} | {'Latency'}")
     print("-" * 75)
     print(f"{'Proposed Linear Cross-Attention':<32} | {prop_total/1e6:>7.2f}M       | {prop_train/1e6:>6.2f}M    | {prop_latency:>6.2f} ms")
     print(f"{'Standard VLM Baseline (ViLT)':<32} | {vlm_total/1e6:>7.2f}M       | {vlm_train/1e6:>6.2f}M    | {vlm_latency:>6.2f} ms")
     print("="*75)
-    print("Conclusion: While dual-encoder models have a higher total parameter count,")
-    print("our modular freezing strategy reduces the trainable parameters to a fraction")
-    print("of end-to-end VLMs, drastically lowering VRAM requirements during training.")
+    print("These measurements do not compare intent/slot quality or establish VRAM savings.")
 
 if __name__ == "__main__":
     main()
