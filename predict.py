@@ -10,20 +10,28 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 INTENT_MAP = INTENT_ID_TO_NAME
 SLOT_MAP = SLOT_ID_TO_TAG
 
-def predict(image_path, text_query, model_path="data/processed/cross_attention_model.pt"):
+def predict(
+    image_path,
+    text_query,
+    model_path="data/processed/crossattentionmodel_product_seed42.pt",
+):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     checkpoint = os.path.join(base_dir, model_path)
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-    # Load Model
     model = CrossAttentionModel(num_intents=NUM_INTENTS, num_slots=NUM_SLOT_LABELS)
-    if os.path.exists(checkpoint):
-        model.load_state_dict(torch.load(checkpoint, map_location=DEVICE))
-        print("Loaded trained model weights successfully.")
-    else:
-        print("Warning: Checkpoint not found. Using initialized model weights.")
+    if not os.path.isfile(checkpoint):
+        raise FileNotFoundError(f"Trained model checkpoint not found: {checkpoint}")
+    checkpoint_data = torch.load(checkpoint, map_location=DEVICE)
+    state_dict = (
+        checkpoint_data["model_state_dict"]
+        if isinstance(checkpoint_data, dict) and "model_state_dict" in checkpoint_data
+        else checkpoint_data
+    )
+    model.load_state_dict(state_dict)
+    print("Loaded trained model weights successfully.")
 
     model.to(DEVICE)
     model.eval()
@@ -46,8 +54,9 @@ def predict(image_path, text_query, model_path="data/processed/cross_attention_m
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze(0))
 
     extracted_slots = []
-    for token, slot_id in zip(tokens, pred_slot_ids):
-        if token in ["[CLS]", "[SEP]", "[PAD]"]:
+    active_tokens = attention_mask.squeeze(0).cpu().numpy()
+    for token, slot_id, is_active in zip(tokens, pred_slot_ids, active_tokens):
+        if not is_active or token in tokenizer.all_special_tokens:
             continue
         tag = SLOT_MAP.get(slot_id, "O")
         if tag != "O":

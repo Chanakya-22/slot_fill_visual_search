@@ -80,12 +80,30 @@ Run dataset checks and focused tests:
 
 The validator checks schema and label validity, existing images, image
 dimensions, token/tag alignment, intent/template/product diversity, exact
-record uniqueness, and fixed-seed reproducibility. Training uses a seeded
-product-group split when product IDs are available, preventing the same
-product image from appearing on both sides of the split. Intent metrics include
+record uniqueness, and fixed-seed reproducibility. Training requires product
+IDs and uses seeded product-group splits, preventing the same product image
+from appearing on both sides of the split. Intent metrics include
 accuracy, macro F1, and per-class precision, recall, and F1. Slot precision,
 recall, and F1 are exact-span-and-type micro metrics over BIO entities; special
 tokens, padding, and ignored WordPieces do not contribute to these scores.
+
+Run one architecture as a shorter pipeline check, then run all three models
+with the shared product-group splits when ready:
+
+```powershell
+.\venv\Scripts\python.exe train.py --models BaselineTextModel --split-mode product --seed 42
+.\venv\Scripts\python.exe train.py --models all --split-mode product --seed 42
+```
+
+To evaluate query-template generalization instead, use
+`--split-mode template`; that mode reserves disjoint template groups and uses
+50/25/25 train/validation/test proportions so every intent is represented in
+each partition. Product generalization uses disjoint product groups and
+70/15/15 proportions. Each experiment writes best-validation checkpoints and
+actual validation/test metrics to `data/processed/`, including the split IDs,
+intent class distributions, measured fine-tuning time, and measured
+batch-size-one inference latency. Test metrics are evaluated only after the
+validation-selected checkpoint is restored.
 
 These generated examples are suitable for pipeline and controlled-method
 checks only. Their labels, images, wording, attributes, and compatibility are

@@ -1,7 +1,6 @@
 import csv
 import hashlib
 import json
-import re
 import tempfile
 import unittest
 from collections import Counter
@@ -134,19 +133,58 @@ class SyntheticDatasetTests(unittest.TestCase):
             def __len__(self):
                 return len(self.df)
 
-        frame = pd.DataFrame(
-            {"product_id": [f"product_{index // 10}" for index in range(100)]}
-        )
+        records = []
+        for product_index in range(10):
+            for repeat in range(2):
+                for intent_id in range(5):
+                    records.append(
+                        {
+                            "sample_id": f"sample_{product_index}_{repeat}_{intent_id}",
+                            "product_id": f"product_{product_index:04d}",
+                            "intent_id": intent_id,
+                            "generation_info": json.dumps(
+                                {
+                                    "template_id": (
+                                        f"template_{intent_id * 4 + (product_index + repeat) % 4:02d}"
+                                    )
+                                }
+                            ),
+                        }
+                    )
+        frame = pd.DataFrame(records)
         dataset = MetadataDataset(frame)
-        train_set, validation_set, grouped = split_dataset(dataset, seed=42)
+        train_set, validation_set, test_set, details = split_dataset(dataset, seed=42)
         train_products = set(frame.iloc[train_set.indices]["product_id"])
         validation_products = set(frame.iloc[validation_set.indices]["product_id"])
-        self.assertTrue(grouped)
+        test_products = set(frame.iloc[test_set.indices]["product_id"])
         self.assertFalse(train_products & validation_products)
-        self.assertEqual(len(validation_set), 20)
+        self.assertFalse(train_products & test_products)
+        self.assertFalse(validation_products & test_products)
+        self.assertEqual(sum(map(len, (train_set, validation_set, test_set))), len(frame))
+        for subset in (train_set, validation_set, test_set):
+            self.assertEqual(set(frame.iloc[subset.indices]["intent_id"]), set(range(5)))
 
-        _, repeated_validation_set, _ = split_dataset(dataset, seed=42)
-        self.assertEqual(validation_set.indices, repeated_validation_set.indices)
+        repeated_train, repeated_validation, repeated_test, repeated_details = split_dataset(
+            dataset, seed=42
+        )
+        self.assertEqual(train_set.indices, repeated_train.indices)
+        self.assertEqual(validation_set.indices, repeated_validation.indices)
+        self.assertEqual(test_set.indices, repeated_test.indices)
+        self.assertEqual(details, repeated_details)
+
+        template_splits = split_dataset(
+            dataset, seed=42, split_mode="template"
+        )
+        template_groups = [
+            set(
+                json.loads(value)["template_id"]
+                for value in frame.iloc[subset.indices]["generation_info"]
+            )
+            for subset in template_splits[:3]
+        ]
+        self.assertFalse(template_groups[0] & template_groups[1])
+        self.assertFalse(template_groups[0] & template_groups[2])
+        self.assertFalse(template_groups[1] & template_groups[2])
 
 
 if __name__ == "__main__":
