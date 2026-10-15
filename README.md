@@ -82,8 +82,10 @@ The validator checks schema and label validity, existing images, image
 dimensions, token/tag alignment, intent/template/product diversity, exact
 record uniqueness, and fixed-seed reproducibility. Training uses a seeded
 product-group split when product IDs are available, preventing the same
-product image from appearing on both sides of the split. Slot F1 is exact
-BIO-entity micro F1; token accuracy is reported separately.
+product image from appearing on both sides of the split. Intent metrics include
+accuracy, macro F1, and per-class precision, recall, and F1. Slot precision,
+recall, and F1 are exact-span-and-type micro metrics over BIO entities; special
+tokens, padding, and ignored WordPieces do not contribute to these scores.
 
 These generated examples are suitable for pipeline and controlled-method
 checks only. Their labels, images, wording, attributes, and compatibility are

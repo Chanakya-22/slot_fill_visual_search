@@ -118,7 +118,8 @@ class SyntheticDatasetTests(unittest.TestCase):
             preds=[[0, 1, 0, 9]],
             labels=[[0, 1, 2, -100]],
         )
-        self.assertAlmostEqual(metrics["slot_accuracy"], 2 / 3)
+        self.assertEqual(metrics["true_entity_count"], 1)
+        self.assertEqual(metrics["predicted_entity_count"], 1)
         self.assertEqual(metrics["slot_f1"], 0.0)
 
     def test_invalid_bio_entity_boundary_is_rejected(self):
