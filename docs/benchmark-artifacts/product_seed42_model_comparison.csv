@@ -1,0 +1,4 @@
+model_name,status,split,seed,selected_epoch,intent_accuracy,intent_macro_f1,slot_entity_precision,slot_entity_recall,slot_entity_f1,training_time_seconds,batch_size_one_latency_ms,parameters_total,parameters_trainable,image_ablation_status,zero_image_intent_accuracy,zero_image_intent_macro_f1,zero_image_slot_entity_f1
+BaselineTextModel,completed,product,42,3,1.0,1.0,1.0,1.0,1.0,329.0771367999987,36.657900000864174,109494544,109494544,not_applicable,,,
+BaselineConcatModel,completed,product,42,3,1.0,1.0,1.0,1.0,1.0,782.6903385999976,75.19380000012461,196962832,196962832,completed,1.0,1.0,1.0
+CrossAttentionModel,completed,product,42,2,1.0,1.0,1.0,1.0,1.0,351.2485794000022,74.63433999946574,198723856,125443600,completed,1.0,1.0,1.0
