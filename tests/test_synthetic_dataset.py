@@ -1,17 +1,22 @@
 import csv
+import hashlib
 import json
+import re
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
 from PIL import Image
 
 from src.labels import SLOT_TAG_TO_ID
-from src.synthetic_data import generate_synthetic_dataset
+from src.synthetic_data import CATEGORIES, COLORS, generate_synthetic_dataset, render_product_image
 from src.utils import compute_slot_metrics
 from train import split_dataset
 from validate_synthetic_dataset import (
+    _validate_bio,
+    count_unreferenced_normalized_image_aliases,
     validate_dataset,
     validate_reproducibility,
     validate_wordpiece_masking,
@@ -26,10 +31,20 @@ class SyntheticDatasetTests(unittest.TestCase):
             self.assertEqual(summary["num_examples"], 100)
             self.assertEqual(summary["num_unique_products"], 10)
             self.assertEqual(summary["num_query_templates"], 24)
+            self.assertGreater(summary["slot_label_distribution"]["B-MATERIAL"], 0)
+            self.assertGreater(summary["slot_label_distribution"]["B-PRICE"], 0)
+            legacy_alias = output_dir / "images" / "product_000.png"
+            Image.new("RGB", (224, 224), (2, 3, 4)).save(legacy_alias)
             validated = validate_dataset(
                 output_dir / "dataset.csv", min_examples=50, min_products=5
             )
             self.assertEqual(validated["seed"], 17)
+            self.assertEqual(
+                count_unreferenced_normalized_image_aliases(output_dir / "dataset.csv"),
+                1,
+            )
+            with Image.open(legacy_alias) as image:
+                self.assertEqual(image.getpixel((0, 0)), (2, 3, 4))
 
             with (output_dir / "dataset.csv").open(newline="", encoding="utf-8") as dataset_file:
                 records = list(csv.DictReader(dataset_file))
@@ -48,6 +63,11 @@ class SyntheticDatasetTests(unittest.TestCase):
                 len(records),
             )
             for record in records:
+                self.assertRegex(record["product_id"], r"^product_\d{4}$")
+                self.assertEqual(
+                    record["image_path"],
+                    f"images/{record['product_id']}.png",
+                )
                 tags = json.loads(record["slot_tags"])
                 ids = json.loads(record["slot_ids"])
                 self.assertEqual(len(tags), len(json.loads(record["tokens"])))
@@ -56,6 +76,36 @@ class SyntheticDatasetTests(unittest.TestCase):
                 with Image.open(image_path) as image:
                     self.assertEqual(image.size, (224, 224))
                     self.assertEqual(image.mode, "RGB")
+
+    def test_category_shape_variants_render_distinct_images(self):
+        with tempfile.TemporaryDirectory(prefix="synthetic-shapes-") as temporary_dir:
+            output_dir = Path(temporary_dir)
+            for category, specification in CATEGORIES.items():
+                image_hashes = set()
+                for shape_index, shape in enumerate(specification["shapes"]):
+                    image_path = output_dir / f"{category}_{shape_index}.png"
+                    render_product_image(
+                        {
+                            "category": category,
+                            "shape_index": shape_index,
+                            "shape": shape,
+                            "color": "red",
+                        },
+                        image_path,
+                    )
+                    with Image.open(image_path) as image:
+                        self.assertGreater(
+                            Counter(image.convert("RGB").get_flattened_data())[COLORS["red"]],
+                            100,
+                        )
+                        image_hashes.add(
+                            hashlib.sha256(image.convert("RGB").tobytes()).hexdigest()
+                        )
+                self.assertEqual(
+                    len(image_hashes),
+                    len(specification["shapes"]),
+                    f"{category} shape variants should render distinctly",
+                )
 
     def test_fixed_seed_reproduces_csv_catalogue_and_images(self):
         validate_reproducibility(seed=23)
@@ -70,6 +120,10 @@ class SyntheticDatasetTests(unittest.TestCase):
         )
         self.assertAlmostEqual(metrics["slot_accuracy"], 2 / 3)
         self.assertEqual(metrics["slot_f1"], 0.0)
+
+    def test_invalid_bio_entity_boundary_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Invalid BIO transition"):
+            _validate_bio(["O", "I-COLOR"], row_number=1)
 
     def test_seeded_product_group_split_has_no_product_leakage(self):
         class MetadataDataset:

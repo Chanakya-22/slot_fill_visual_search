@@ -23,11 +23,18 @@ examples). To regenerate with another seed or a smaller divisible sample:
 
 The generator writes `data/raw/dataset.csv`, `data/raw/catalogue.json`,
 `data/raw/dataset_summary.json`, and one PNG per product under
-`data/raw/images/`. Product images are drawn locally with category-specific
-Pillow vector shapes, recorded color finishes, highlights, and hardware
-details. Material, price, and declared compatibility are structured catalogue
-metadata; they are not inferred from image pixels. Image paths in the CSV are
-relative to its directory so the generated dataset remains portable.
+`data/raw/images/`. Canonical IDs use four digits throughout, for example
+`product_0020` and `images/product_0020.png`. Product images are drawn locally
+with category-specific Pillow vector shapes, recorded color finishes,
+highlights, and hardware details. Material, price, and declared compatibility
+are structured catalogue metadata; they are not inferred from image pixels.
+Image paths in the CSV are relative to its directory so the generated dataset
+remains portable.
+
+The image directory may also contain old, unreferenced files from prior
+generators. Validation reports legacy filenames whose integer IDs overlap the
+current catalogue; it does not treat them as product duplicates, overwrite,
+or delete them. Only paths listed in the current CSV are part of this dataset.
 
 ## Data contract and labels
 

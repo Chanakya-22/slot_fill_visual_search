@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw
 from src.labels import INTENT_NAME_TO_ID, SLOT_TAG_TO_ID
 
 DEFAULT_NUM_PRODUCTS = 100
-RENDERER_NAME = "procedural_pillow_vector_v1"
+RENDERER_NAME = "procedural_pillow_vector_v2"
 
 CATEGORIES = {
     "gear": {
@@ -139,18 +139,32 @@ def render_product_image(product: dict[str, Any], image_path: Path) -> None:
     category = product["category"]
     if category == "gear":
         points = []
-        tooth_count = 12 + variation * 2
+        tooth_count = (12, 14, 16, 24)[variation]
         for point_index in range(tooth_count * 2):
             angle = point_index * math.pi / tooth_count
             radius = 66 if point_index % 2 == 0 else 53
             points.append((center_x + radius * math.cos(angle), center_y + radius * math.sin(angle)))
         draw.polygon(points, fill=color, outline=dark)
+        if variation == 1:
+            for start_angle in (15, 135, 255):
+                draw.arc((74, 73, 150, 149), start_angle, start_angle + 100, fill=light, width=4)
+        elif variation == 2:
+            draw.ellipse((66, 65, 158, 157), outline=light, width=4)
         draw.ellipse((79, 78, 145, 144), fill=(239, 241, 242), outline=dark, width=5)
         draw.ellipse((99, 98, 125, 124), fill=(199, 203, 205), outline=dark, width=3)
-        for spoke in range(variation + 2):
-            draw.line((112, 53, 112, 78), fill=light, width=4)
-            if spoke:
-                draw.line((112, 78, 112 + spoke * 7, 82), fill=light, width=3)
+        if variation == 0:
+            for angle in range(0, 360, 45):
+                radians = math.radians(angle)
+                draw.line(
+                    (
+                        center_x + 36 * math.cos(radians),
+                        center_y + 36 * math.sin(radians),
+                        center_x + 51 * math.cos(radians),
+                        center_y + 51 * math.sin(radians),
+                    ),
+                    fill=light,
+                    width=3,
+                )
     elif category == "bracket":
         if variation == 0:
             draw.line((66, 61, 66, 157, 157, 157), fill=dark, width=31, joint="curve")
@@ -176,13 +190,29 @@ def render_product_image(product: dict[str, Any], image_path: Path) -> None:
         for x, y in hole_positions:
             draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=(239, 241, 242), outline=dark, width=2)
     elif category == "hinge":
-        offset = variation * 4
-        draw.rounded_rectangle((52, 63, 105 + offset, 160), radius=8, fill=color, outline=dark, width=4)
-        draw.rounded_rectangle((119 - offset, 63, 172, 160), radius=8, fill=color, outline=dark, width=4)
-        draw.ellipse((103, 53, 121, 171), fill=(181, 187, 190), outline=dark, width=3)
-        for x in (73, 146):
-            for y in (86, 137):
-                draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=(239, 241, 242), outline=dark, width=2)
+        if variation == 0:
+            leaves = ((52, 63, 105, 160), (119, 63, 172, 160))
+            pin_box = (103, 53, 121, 171)
+            hole_positions = ((73, 86), (73, 137), (146, 86), (146, 137))
+        elif variation == 1:
+            draw.polygon(((51, 68), (101, 86), (101, 137), (51, 158)), fill=color, outline=dark)
+            draw.polygon(((123, 86), (173, 68), (173, 158), (123, 137)), fill=color, outline=dark)
+            leaves = ()
+            pin_box = (103, 53, 121, 171)
+            hole_positions = ((64, 87), (64, 139), (160, 87), (160, 139))
+        elif variation == 2:
+            leaves = ((52, 76, 105, 151), (119, 57, 172, 132))
+            pin_box = (103, 53, 121, 171)
+            hole_positions = ((72, 96), (72, 136), (146, 77), (146, 115))
+        else:
+            leaves = ((67, 78, 105, 146), (119, 78, 157, 146))
+            pin_box = (104, 69, 120, 155)
+            hole_positions = ((82, 96), (82, 129), (142, 96), (142, 129))
+        for box in leaves:
+            draw.rounded_rectangle(box, radius=8, fill=color, outline=dark, width=4)
+        draw.ellipse(pin_box, fill=(181, 187, 190), outline=dark, width=3)
+        for x, y in hole_positions:
+            draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=(239, 241, 242), outline=dark, width=2)
     elif category == "connector":
         if variation == 0:
             draw.rounded_rectangle((66, 70, 158, 151), radius=24, fill=color, outline=dark, width=5)
@@ -207,7 +237,11 @@ def render_product_image(product: dict[str, Any], image_path: Path) -> None:
         elif variation == 2:
             draw.polygon(((52, 92), (92, 92), (92, 54), (112, 54), (112, 112), (172, 112), (172, 133), (72, 133)), fill=color, outline=dark)
         else:
-            draw.polygon(((101, 95), (101, 47), (123, 47), (137, 95)), fill=color, outline=dark)
+            draw.polygon(
+                ((127, 96), (136, 58), (157, 58), (166, 82), (190, 82), (190, 103), (153, 103), (153, 96)),
+                fill=color,
+                outline=dark,
+            )
         for x in (72, 151):
             draw.ellipse((x - 8, 108, x + 8, 124), fill=(239, 241, 242), outline=dark, width=3)
 
